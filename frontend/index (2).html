@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Low pass IIR voice denoiser</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  :root {
+    --bg: #e8edf1;
+    --panel: #f7f9fb;
+    --line: #c7d1d9;
+    --ink: #16232e;
+    --muted: #586875;
+    --noisy: #d9822b;
+    --clean: #0e8a84;
+    --resp: #4a3fb0;
+    --danger: #a8321f;
+    --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+    --body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 var(--body);
+  }
+  .top { padding: 28px 32px 8px; max-width: 1400px; margin: 0 auto; }
+  h1 {
+    font: 700 clamp(28px, 4vw, 44px)/1.05 var(--display);
+    letter-spacing: -0.02em;
+    margin: 0 0 8px;
+  }
+  .top p { margin: 0; color: var(--muted); max-width: 62ch; }
+
+  #alert {
+    max-width: 1336px; margin: 16px auto 0; padding: 10px 14px;
+    background: #fbe9e5; border: 1px solid #e2b3a9; color: var(--danger);
+    border-radius: 6px;
+  }
+  #alert[hidden] { display: none; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 330px 1fr;
+    gap: 24px;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px 32px 48px;
+    align-items: start;
+  }
+  @media (max-width: 960px) {
+    .layout { grid-template-columns: 1fr; padding: 16px; }
+    .top { padding: 20px 16px 0; }
+  }
+
+  .controls {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 6px 18px 18px;
+    position: sticky; top: 16px;
+  }
+  @media (max-width: 960px) { .controls { position: static; } }
+  .controls section { padding: 14px 0 6px; }
+  .controls section + section { border-top: 1px solid var(--line); }
+  h2 {
+    font: 600 17px/1.2 var(--display);
+    margin: 0 0 12px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .step {
+    display: inline-grid; place-items: center;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--ink); color: #fff; font: 600 13px var(--body);
+  }
+  label, .lbl { display: block; font-weight: 500; margin: 12px 0 4px; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; }
+  output { color: var(--muted); font-variant-numeric: tabular-nums; }
+  select, input[type=range] { width: 100%; }
+  select {
+    padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+    background: #fff; font: inherit; color: inherit;
+  }
+  input[type=range] { accent-color: var(--ink); }
+  .check { display: flex; align-items: center; gap: 8px; font-weight: 500; margin-top: 14px; }
+  .check input { width: 16px; height: 16px; accent-color: var(--ink); }
+  .help { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+
+  button, .filebtn {
+    font: 600 14px var(--body);
+    border-radius: 6px; cursor: pointer;
+    padding: 9px 14px; border: 1px solid var(--ink);
+  }
+  button.primary { background: var(--ink); color: #fff; width: 100%; margin-top: 16px; }
+  button.ghost, .filebtn { background: #fff; color: var(--ink); border-color: var(--line); }
+  button.ghost:hover, .filebtn:hover { border-color: var(--ink); }
+  .filebtn { display: block; text-align: center; margin-top: 10px; font-weight: 500; }
+  .filebtn input { display: none; }
+  button:disabled { opacity: .55; cursor: wait; }
+  :focus-visible { outline: 3px solid var(--resp); outline-offset: 2px; }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 6px; }
+  .presets button { padding: 6px 10px; font-weight: 500; }
+
+  .stage { min-width: 0; }
+  .empty {
+    border: 1.5px dashed var(--line); border-radius: 10px;
+    padding: 56px 28px; text-align: center; color: var(--muted);
+  }
+  .empty strong { display: block; color: var(--ink); font: 600 20px var(--display); margin-bottom: 6px; }
+
+  .players { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .players { grid-template-columns: 1fr; } }
+  .player {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; border-top-width: 4px;
+  }
+  .player.noisy { border-top-color: var(--noisy); }
+  .player.clean { border-top-color: var(--clean); }
+  .player h3 { margin: 0 0 8px; font: 600 16px var(--display); }
+  audio { width: 100%; }
+
+  .metrics {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0; margin: 16px 0;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .metric { padding: 12px 16px; border-right: 1px solid var(--line); }
+  .metric:last-child { border-right: 0; }
+  .metric .k { color: var(--muted); font-size: 13px; }
+  .metric .v { font: 700 24px/1.2 var(--display); font-variant-numeric: tabular-nums; }
+  .metric.big .v { color: var(--clean); }
+  #hint { min-height: 22px; margin: 0 0 12px; color: var(--danger); font-weight: 500; }
+
+  .chart {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 12px 4px; margin-bottom: 16px; min-width: 0;
+  }
+  .chart h3 { margin: 0 0 2px 4px; font: 600 16px var(--display); }
+  .chart p { margin: 0 0 4px 4px; color: var(--muted); font-size: 13px; }
+  .two { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; }
+  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>Low pass IIR voice denoiser</h1>
+  <p>Add hiss to a voice clip, design a filter that removes it, then compare what you hear with what the spectrum shows.</p>
+</header>
+
+<div id="alert" role="alert" hidden></div>
+
+<main class="layout">
+  <aside class="controls">
+    <section>
+      <h2><span class="step">1</span>Noisy clip</h2>
+
+      <label for="sample">Clean voice sample</label>
+      <select id="sample"></select>
+
+      <div class="row"><label for="snr">Noise level (SNR)</label><output id="snrOut">5 dB</output></div>
+      <input type="range" id="snr" min="-5" max="30" step="1" value="5">
+      <p class="help">Lower SNR means more hiss.</p>
+
+      <div class="row"><label for="noiseStart">Hiss starts at</label><output id="noiseStartOut">3500 Hz</output></div>
+      <input type="range" id="noiseStart" min="1000" max="8000" step="100" value="3500">
+
+      <button class="primary" id="gen">Generate noisy clip</button>
+      <label class="filebtn" for="file">Or upload a noisy WAV<input type="file" id="file" accept=".wav,audio/wav,audio/x-wav"></label>
+    </section>
+
+    <section>
+      <h2><span class="step">2</span>Filter</h2>
+
+      <div class="presets" role="group" aria-label="Presets">
+        <button class="ghost" data-preset="good">Good setting</button>
+        <button class="ghost" data-preset="muffled">Too low</button>
+        <button class="ghost" data-preset="elliptic">Sharp elliptic</button>
+      </div>
+
+      <label for="ftype">Filter type</label>
+      <select id="ftype">
+        <option value="butterworth">Butterworth</option>
+        <option value="chebyshev">Chebyshev type I</option>
+        <option value="elliptic">Elliptic</option>
+      </select>
+
+      <div class="row"><label for="order">Order</label><output id="orderOut">6</output></div>
+      <input type="range" id="order" min="1" max="12" step="1" value="6">
+
+      <div class="row"><label for="cutoff">Cutoff frequency</label><output id="cutoffOut">3400 Hz</output></div>
+      <input type="range" id="cutoff" min="200" max="7950" step="50" value="3400">
+
+      <div id="rippleWrap" hidden>
+        <div class="row"><label for="ripple">Passband ripple</label><output id="rippleOut">1.0 dB</output></div>
+        <input type="range" id="ripple" min="0.1" max="3" step="0.1" value="1">
+      </div>
+      <div id="stopWrap" hidden>
+        <div class="row"><label for="stop">Stopband attenuation</label><output id="stopOut">40 dB</output></div>
+        <input type="range" id="stop" min="20" max="100" step="5" value="40">
+      </div>
+
+      <div class="check"><input type="checkbox" id="zp" checked><label for="zp" style="margin:0">Zero-phase (filter forward and back)</label></div>
+      <p class="help">Off gives an ordinary real-time IIR, which delays and bends the waveform. Turn it off to hear and see the difference.</p>
+    </section>
+  </aside>
+
+  <div class="stage">
+    <div class="empty" id="empty">
+      <strong>No clip loaded yet</strong>
+      Choose a sample and select "Generate noisy clip" to begin.
+    </div>
+
+    <div id="results" hidden>
+      <div class="players">
+        <div class="player noisy"><h3>Noisy</h3><audio id="aNoisy" controls></audio></div>
+        <div class="player clean"><h3>Filtered</h3><audio id="aClean" controls></audio></div>
+      </div>
+
+      <div class="metrics">
+        <div class="metric"><div class="k">SNR before</div><div class="v" id="mBefore">n/a</div></div>
+        <div class="metric"><div class="k">SNR after</div><div class="v" id="mAfter">n/a</div></div>
+        <div class="metric big"><div class="k">Improvement</div><div class="v" id="mGain">n/a</div></div>
+        <div class="metric"><div class="k">Filter</div><div class="v" id="mFilter" style="font-size:18px">n/a</div></div>
+      </div>
+      <p id="hint" aria-live="polite"></p>
+
+      <div class="chart">
+        <h3>Spectrum</h3>
+        <p>Where the energy sits across frequency. The dashed line is the cutoff.</p>
+        <div id="pSpec" style="height:340px"></div>
+      </div>
+
+      <div class="two">
+        <div class="chart">
+          <h3>Filter frequency response</h3>
+          <p>How much each frequency is attenuated.</p>
+          <div id="pResp" style="height:280px"></div>
+        </div>
+        <div class="chart">
+          <h3>Poles and zeros</h3>
+          <p>Poles stay inside the unit circle, so the filter is stable.</p>
+          <div id="pPz" style="height:280px"></div>
+        </div>
+      </div>
+
+      <div class="chart">
+        <h3>Waveform</h3>
+        <p>Amplitude over time, noisy against filtered.</p>
+        <div id="pWave" style="height:240px"></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+const API = "http://127.0.0.1:8000";
+const C = { noisy: "#d9822b", clean: "#0e8a84", resp: "#4a3fb0", ink: "#16232e", grid: "#dbe2e8" };
+const $ = (id) => document.getElementById(id);
+
+const state = { audioId: null, fs: null, source: null, noiseStart: 3500, noisySpec: null, noisyWave: null, seq: 0, urls: {} };
+
+/* ---------- helpers ---------- */
+function showError(msg) { const a = $("alert"); a.textContent = msg; a.hidden = !msg; }
+
+async function api(path, opts) {
+  let res;
+  try { res = await fetch(API + path, opts); }
+  catch (e) { throw new Error("Cannot reach the backend. Start it with: uvicorn main:app --reload"); }
+  if (!res.ok) {
+    let detail = "Request failed (" + res.status + ")";
+    try { const j = await res.json(); if (j.detail) detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch (_) {}
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+function setAudio(el, key, b64) {
+  const bin = atob(b64), arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([arr], { type: "audio/wav" }));
+  const t = el.currentTime, wasPlaying = !el.paused;
+  el.src = url;
+  el.addEventListener("loadedmetadata", () => {
+    if (t && el.duration) el.currentTime = Math.min(t, el.duration - 0.05);
+    if (wasPlaying) el.play().catch(() => {});
+  }, { once: true });
+  if (state.urls[key]) URL.revokeObjectURL(state.urls[key]);
+  state.urls[key] = url;
+}
+
+const fmtDb = (v) => (v == null ? "n/a" : v.toFixed(1) + " dB");
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/* ---------- plots ---------- */
+const baseLayout = (xTitle, yTitle) => ({
+  margin: { l: 56, r: 16, t: 8, b: 44 },
+  paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+  font: { family: "Instrument Sans, Segoe UI, sans-serif", color: C.ink, size: 12 },
+  xaxis: { title: { text: xTitle }, gridcolor: C.grid, zeroline: false },
+  yaxis: { title: { text: yTitle }, gridcolor: C.grid, zeroline: false },
+  legend: { orientation: "h", y: 1.12, x: 0 },
+  hovermode: "x unified",
+});
+const cfg = { displaylogo: false, responsive: true };
+const cutLine = (x) => ({ type: "line", x0: x, x1: x, yref: "paper", y0: 0, y1: 1, line: { color: C.ink, width: 1.5, dash: "dash" } });
+
+function drawSpectrum(filtSpec, cutoff) {
+  const lay = baseLayout("Frequency (Hz)", "Power (dB/Hz)");
+  lay.shapes = [cutLine(cutoff)];
+  Plotly.react("pSpec", [
+    { x: state.noisySpec.f, y: state.noisySpec.db, name: "Noisy", mode: "lines", line: { color: C.noisy, width: 1.8 } },
+    { x: filtSpec.f, y: filtSpec.db, name: "Filtered", mode: "lines", line: { color: C.clean, width: 1.8 } },
+  ], lay, cfg);
+}
+
+function drawResponse(resp, cutoff) {
+  const lay = baseLayout("Frequency (Hz)", "Gain (dB)");
+  lay.yaxis.range = [-100, 5];
+  lay.shapes = [cutLine(cutoff)];
+  lay.showlegend = false;
+  Plotly.react("pResp", [{ x: resp.f, y: resp.db, mode: "lines", line: { color: C.resp, width: 2 }, name: "Gain" }], lay, cfg);
+}
+
+function drawPZ(pz) {
+  const th = Array.from({ length: 181 }, (_, i) => (i / 180) * 2 * Math.PI);
+  const lay = baseLayout("Real", "Imaginary");
+  lay.xaxis.range = [-1.4, 1.4];
+  lay.yaxis.range = [-1.4, 1.4];
+  lay.yaxis.scaleanchor = "x";
+  lay.hovermode = "closest";
+  lay.legend = { orientation: "h", y: 1.12, x: 0 };
+  Plotly.react("pPz", [
+    { x: th.map(Math.cos), y: th.map(Math.sin), mode: "lines", line: { color: C.grid, width: 1.5 }, hoverinfo: "skip", showlegend: false },
+    { x: pz.zeros.re, y: pz.zeros.im, mode: "markers", name: "Zeros", marker: { symbol: "circle-open", size: 10, color: C.ink, line: { width: 2 } } },
+    { x: pz.poles.re, y: pz.poles.im, mode: "markers", name: "Poles", marker: { symbol: "x", size: 10, color: C.resp, line: { width: 2 } } },
+  ], lay, cfg);
+}
+
+function drawWave(filtWave) {
+  const lay = baseLayout("Time (s)", "Amplitude");
+  Plotly.react("pWave", [
+    { x: state.noisyWave.t, y: state.noisyWave.y, name: "Noisy", mode: "lines", line: { color: C.noisy, width: 1 }, opacity: 0.7 },
+    { x: filtWave.t, y: filtWave.y, name: "Filtered", mode: "lines", line: { color: C.clean, width: 1.4 } },
+  ], lay, cfg);
+}
+
+/* ---------- loading a noisy clip ---------- */
+function applyNoisy(p, source) {
+  state.audioId = p.audio_id;
+  state.fs = p.fs;
+  state.source = source;
+  state.noisySpec = p.noisy_spectrum;
+  state.noisyWave = p.noisy_waveform;
+
+  // cutoff cannot exceed Nyquist for this clip
+  const maxCut = Math.floor(p.fs / 2 / 50) * 50 - 50;
+  $("cutoff").max = maxCut;
+  if (+$("cutoff").value > maxCut) $("cutoff").value = maxCut;
+  syncOutputs();
+
+  setAudio($("aNoisy"), "noisy", p.noisy_audio);
+  $("empty").hidden = true;
+  $("results").hidden = false;
+  runFilter();
+}
+
+async function generate() {
+  showError("");
+  const btn = $("gen");
+  btn.disabled = true;
+  try {
+    const body = { sample: $("sample").value, snr_db: +$("snr").value, noise_start_hz: +$("noiseStart").value };
+    state.noiseStart = body.noise_start_hz;
+    const p = await api("/generate-noisy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    applyNoisy(p, "generated");
+  } catch (e) { showError(e.message); }
+  btn.disabled = false;
+}
+
+async function upload(file) {
+  showError("");
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const p = await api("/upload", { method: "POST", body: fd });
+    applyNoisy(p, "uploaded");
+  } catch (e) { showError(e.message); }
+}
+
+/* ---------- filtering ---------- */
+async function runFilter() {
+  if (!state.audioId) return;
+  const mySeq = ++state.seq;
+  const req = {
+    audio_id: state.audioId,
+    filter_type: $("ftype").value,
+    order: +$("order").value,
+    cutoff_hz: +$("cutoff").value,
+    ripple_db: +$("ripple").value,
+    stopband_db: +$("stop").value,
+    zero_phase: $("zp").checked,
+  };
+  try {
+    const r = await api("/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) });
+    if (mySeq !== state.seq) return; // a newer request is already in flight
+    showError("");
+    setAudio($("aClean"), "clean", r.filtered_audio);
+    drawSpectrum(r.filtered_spectrum, req.cutoff_hz);
+    drawResponse(r.frequency_response, req.cutoff_hz);
+    drawPZ(r.pole_zero);
+    drawWave(r.filtered_waveform);
+
+    const m = r.metrics;
+    $("mBefore").textContent = fmtDb(m.snr_before_db);
+    $("mAfter").textContent = fmtDb(m.snr_after_db);
+    $("mGain").textContent = m.snr_improvement_db == null ? "n/a" : (m.snr_improvement_db >= 0 ? "+" : "") + m.snr_improvement_db.toFixed(1) + " dB";
+    $("mFilter").textContent = cap(m.filter_type) + ", order " + m.order;
+    updateHint();
+  } catch (e) { if (mySeq === state.seq) showError(e.message); }
+}
+const scheduleFilter = debounce(runFilter, 150);
+
+function updateHint() {
+  const c = +$("cutoff").value;
+  let msg = "";
+  if (c < 2000) msg = "This cutoff is inside the voice band, so the speech will start to sound muffled.";
+  else if (state.source === "generated" && c > state.noiseStart + 500) msg = "This cutoff is above where the hiss starts, so some hiss will pass through.";
+  $("hint").textContent = msg;
+}
+
+/* ---------- controls ---------- */
+function syncOutputs() {
+  $("snrOut").textContent = $("snr").value + " dB";
+  $("noiseStartOut").textContent = $("noiseStart").value + " Hz";
+  $("orderOut").textContent = $("order").value;
+  $("cutoffOut").textContent = $("cutoff").value + " Hz";
+  $("rippleOut").textContent = (+$("ripple").value).toFixed(1) + " dB";
+  $("stopOut").textContent = $("stop").value + " dB";
+  const t = $("ftype").value;
+  $("rippleWrap").hidden = t === "butterworth";
+  $("stopWrap").hidden = t !== "elliptic";
+}
+
+["snr", "noiseStart"].forEach((id) => $(id).addEventListener("input", syncOutputs));
+["ftype", "order", "cutoff", "ripple", "stop", "zp"].forEach((id) => {
+  $(id).addEventListener("input", () => { syncOutputs(); scheduleFilter(); });
+});
+$("gen").addEventListener("click", generate);
+$("file").addEventListener("change", (e) => { if (e.target.files[0]) upload(e.target.files[0]); e.target.value = ""; });
+
+const PRESETS = {
+  good: { ftype: "butterworth", order: 6, cutoff: 3400 },
+  muffled: { ftype: "butterworth", order: 6, cutoff: 800 },
+  elliptic: { ftype: "elliptic", order: 6, cutoff: 3400 },
+};
+document.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => {
+  const p = PRESETS[b.dataset.preset];
+  $("ftype").value = p.ftype;
+  $("order").value = p.order;
+  $("cutoff").value = Math.min(p.cutoff, +$("cutoff").max);
+  syncOutputs();
+  scheduleFilter();
+}));
+
+/* ---------- start ---------- */
+(async function init() {
+  syncOutputs();
+  try {
+    const { samples } = await api("/samples");
+    if (!samples.length) { showError("No WAV files found in backend/samples. Add a clean voice recording there and reload this page."); return; }
+    $("sample").innerHTML = samples.map((s) => `<option value="${s}">${s.replace(/_/g, " ")}</option>`).join("");
+  } catch (e) { showError(e.message); }
+})();
+</script>
+</body>
+</html>
