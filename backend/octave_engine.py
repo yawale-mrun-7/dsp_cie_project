@@ -17,6 +17,7 @@ of octave-cli.exe, for example:
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -35,19 +36,30 @@ class OctaveEngine:
         self._oc = None          # Oct2Py instance, or None when unavailable
         self.available = False
         self.version: Optional[str] = None
+        self.executable: Optional[str] = None
         self.reason: Optional[str] = None
         self._try_init()
 
     # ---------------------------------------------------------------- startup
     def _try_init(self):
+        # Auto-detect GNU Octave on Windows if OCTAVE_EXECUTABLE is not explicitly set
+        exe = os.environ.get("OCTAVE_EXECUTABLE", "")
+        if not exe and os.name == "nt":
+            import glob
+            found = glob.glob(r"C:\Program Files\GNU Octave\*\mingw64\bin\octave-cli.exe")
+            if not found:
+                found = glob.glob(r"C:\Octave\*\mingw64\bin\octave-cli.exe")
+            if found:
+                exe = found[0]
+                os.environ["OCTAVE_EXECUTABLE"] = exe
+
         try:
-            import oct2py  # noqa: F401 -- imported for version check first
+            import oct2py  # noqa: F401
         except ImportError:
             self.reason = "oct2py is not installed (pip install oct2py)."
             log.warning("Octave engine: %s", self.reason)
             return
 
-        exe = os.environ.get("OCTAVE_EXECUTABLE", "")
         kwargs = {}
         if exe:
             kwargs["executable"] = exe
@@ -63,6 +75,7 @@ class OctaveEngine:
             self._oc = oc
             self.available = True
             self.version = str(ver_str).strip()
+            self.executable = exe if exe else "octave-cli"
             log.info("Octave engine ready (version %s).", self.version)
         except Exception as exc:
             self.reason = str(exc)
@@ -73,6 +86,8 @@ class OctaveEngine:
         return {
             "available": self.available,
             "version": self.version,
+            "executable": self.executable,
+            "script": "octave/iir_lowpass.m",
             "reason": self.reason,
         }
 
@@ -108,6 +123,7 @@ class OctaveEngine:
         # Octave functions expect a column vector
         x_col = x.reshape(-1, 1).astype(np.float64)
 
+        t0 = time.perf_counter()
         with self._lock:
             try:
                 y, sos, z, p, w, h_db = self._oc.iir_lowpass(
@@ -123,6 +139,7 @@ class OctaveEngine:
                 )
             except Exception as exc:
                 raise RuntimeError(f"Octave call failed: {exc}") from exc
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
 
         # oct2py may return 2-D column arrays; flatten to 1-D
         y = np.array(y, dtype=np.float64).ravel()
@@ -140,6 +157,7 @@ class OctaveEngine:
             "poles": {"re": np.real(p_arr).tolist(), "im": np.imag(p_arr).tolist()},
             "freq_hz": w.tolist(),
             "freq_db": np.maximum(h_db_arr, -120.0).tolist(),
+            "elapsed_ms": elapsed_ms,
         }
 
 

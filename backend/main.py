@@ -5,7 +5,10 @@ Run:  uvicorn main:app --reload
 App:  http://127.0.0.1:8000
 Docs: http://127.0.0.1:8000/docs
 """
+import io
 import logging
+import re
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +18,9 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+import numpy as np
+import scipy
+from scipy.io import wavfile
 
 import dsp
 from octave_engine import engine as octave_engine
@@ -122,15 +128,52 @@ def generate_noisy(req: NoisyRequest):
 
 
 @app.post("/upload")
-def upload(file: UploadFile = File(...)):
-    """Upload your own noisy WAV. There is no clean reference, so SNR numbers are not available."""
+def upload(
+    file: UploadFile = File(...),
+    treat_as: Literal["clean", "noisy"] = Form("noisy"),
+    snr_db: float = Form(5.0),
+    noise_start_hz: float = Form(3500.0),
+):
+    """
+    Upload a WAV file.
+    treat_as="clean": The file is saved to samples/ as a clean reference, resampled to
+      16000 Hz, and simulated hiss is added according to snr_db and noise_start_hz.
+      The user can adjust sliders later to re-generate hiss, and full SNR metrics are displayed.
+    treat_as="noisy": The clip is treated as already noisy with no clean reference.
+    """
     try:
-        fs, noisy = dsp.read_wav(file.file.read())
+        raw = file.file.read()
+        fs_orig, x = dsp.read_wav(raw)
     except Exception:
         raise HTTPException(400, "Could not read that file. Please upload a PCM WAV file.")
-    if len(noisy) < 2048:
+    if len(x) < 2048:
         raise HTTPException(400, "Clip is too short.")
-    return _noisy_payload(_save(fs, None, noisy))
+
+    if treat_as == "clean":
+        x16 = dsp.resample_to_16k(x, fs_orig)
+        fs = dsp.TARGET_FS
+        clean = x16
+        noisy = dsp.add_hiss(clean, fs, snr_db, noise_start_hz)
+
+        # Save to SAMPLES_DIR so it appears in the dropdown and can be re-used with the sliders
+        base_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", Path(file.filename or "upload").stem)
+        sample_name = f"user_{base_name}_{uuid.uuid4().hex[:4]}"
+        try:
+            pcm = (np.clip(clean, -1.0, 1.0) * 32767).astype(np.int16)
+            buf = io.BytesIO()
+            wavfile.write(buf, fs, pcm)
+            (SAMPLES_DIR / f"{sample_name}.wav").write_bytes(buf.getvalue())
+        except Exception as exc:
+            log.warning("Could not persist clean sample to disk: %s", exc)
+
+        audio_id = _save(fs, clean, noisy)
+        payload = _noisy_payload(audio_id)
+        payload["sample_name"] = sample_name
+        return payload
+    else:
+        # treat_as == "noisy"
+        audio_id = _save(fs_orig, None, x)
+        return _noisy_payload(audio_id)
 
 
 @app.post("/record")
@@ -161,7 +204,6 @@ def record(
         raise HTTPException(400, "Recording is too short (minimum 1 second). Please try again.")
 
     # Reject near-silent recordings (RMS below threshold, before resampling)
-    import numpy as np
     rms = float(np.sqrt(np.mean(x ** 2)))
     if rms < SILENCE_RMS:
         raise HTTPException(
@@ -176,14 +218,17 @@ def record(
     # Optional: save the resampled clean recording to disk for later offline analysis
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     rec_name = f"rec_{ts}_{uuid.uuid4().hex[:6]}.wav"
+    sample_name = None
     try:
-        import numpy as np
-        from scipy.io import wavfile
-        import io
         pcm = (np.clip(x16, -1.0, 1.0) * 32767).astype(np.int16)
         buf = io.BytesIO()
         wavfile.write(buf, fs, pcm)
         (RECORDINGS_DIR / rec_name).write_bytes(buf.getvalue())
+
+        # If clean, also expose as a sample so sliders can be adjusted later
+        if treat_as == "clean":
+            sample_name = f"rec_{ts}_{uuid.uuid4().hex[:4]}"
+            (SAMPLES_DIR / f"{sample_name}.wav").write_bytes(buf.getvalue())
     except Exception as exc:
         log.warning("Could not save recording to disk: %s", exc)
         rec_name = None
@@ -199,6 +244,8 @@ def record(
     payload = _noisy_payload(audio_id)
     if rec_name:
         payload["saved_recording"] = rec_name
+    if sample_name:
+        payload["sample_name"] = sample_name
     return payload
 
 
@@ -210,6 +257,7 @@ def filter_audio(req: FilterRequest):
         raise HTTPException(404, "Unknown audio_id. Generate or upload a clip first.")
     fs, clean, noisy = entry["fs"], entry["clean"], entry["noisy"]
 
+    t0 = time.perf_counter()
     try:
         sos = dsp.design_sos(
             req.filter_type, req.order, req.cutoff_hz, fs, req.ripple_db, req.stopband_db
@@ -218,6 +266,7 @@ def filter_audio(req: FilterRequest):
         raise HTTPException(400, str(err))
 
     filtered = dsp.apply_filter(sos, noisy, req.zero_phase)
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
 
     freqs, mag_db = dsp.frequency_response(sos, fs)
     zeros, poles = dsp.pole_zero(sos)
@@ -232,6 +281,12 @@ def filter_audio(req: FilterRequest):
 
     return {
         "engine": "scipy",
+        "engine_info": {
+            "name": "SciPy",
+            "version": scipy.__version__,
+            "method": "scipy.signal.sosfiltfilt" if req.zero_phase else "scipy.signal.sosfilt",
+            "elapsed_ms": elapsed_ms,
+        },
         "fs": fs,
         "filtered_audio": dsp.to_wav_base64(filtered, fs),
         "filtered_waveform": {"t": t, "y": y},
@@ -281,6 +336,7 @@ def octave_filter(req: FilterRequest):
     if not 1 <= req.order <= 12:
         raise HTTPException(400, "Order must be between 1 and 12.")
 
+    t0 = time.perf_counter()
     try:
         result = octave_engine.run_filter(
             noisy, fs,
@@ -289,6 +345,7 @@ def octave_filter(req: FilterRequest):
         )
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
+    total_ms = round((time.perf_counter() - t0) * 1000, 2)
 
     filtered = result["y"]
     f_spec, db_spec = dsp.spectrum(filtered, fs)
@@ -302,6 +359,14 @@ def octave_filter(req: FilterRequest):
 
     return {
         "engine": "octave",
+        "engine_info": {
+            "name": "GNU Octave",
+            "version": octave_engine.version,
+            "executable": octave_engine.executable,
+            "script": "octave/iir_lowpass.m",
+            "elapsed_ms": result.get("elapsed_ms", total_ms),
+            "command": f"iir_lowpass(x, {fs}, '{req.filter_type}', {req.order}, {req.cutoff_hz:.0f}, {req.ripple_db:.1f}, {req.stopband_db:.1f}, {str(req.zero_phase).lower()})",
+        },
         "fs": fs,
         "filtered_audio": dsp.to_wav_base64(filtered, fs),
         "filtered_waveform": {"t": t_wave, "y": y_wave},
@@ -343,14 +408,17 @@ def compare(req: FilterRequest):
         raise HTTPException(400, f"Cutoff must be between 0 and {fs / 2:.0f} Hz for this clip.")
 
     # SciPy engine
+    t0_sp = time.perf_counter()
     try:
         sos = dsp.design_sos(req.filter_type, req.order, req.cutoff_hz, fs, req.ripple_db, req.stopband_db)
     except ValueError as err:
         raise HTTPException(400, str(err))
     sp_filtered = dsp.apply_filter(sos, noisy, req.zero_phase)
+    sp_elapsed_ms = round((time.perf_counter() - t0_sp) * 1000, 2)
     sp_freqs, sp_db = dsp.frequency_response(sos, fs)
 
     # Octave engine
+    t0_oct = time.perf_counter()
     try:
         oct_result = octave_engine.run_filter(
             noisy, fs,
@@ -359,6 +427,7 @@ def compare(req: FilterRequest):
         )
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
+    oct_elapsed_ms = oct_result.get("elapsed_ms", round((time.perf_counter() - t0_oct) * 1000, 2))
     oct_filtered = oct_result["y"]
     oct_freqs = oct_result["freq_hz"]
     oct_db = oct_result["freq_db"]
@@ -389,13 +458,25 @@ def compare(req: FilterRequest):
         if sp_snr_after is not None and oct_snr_after is not None and snr_before is not None:
             snr_diff = (sp_snr_after - snr_before) - (oct_snr_after - snr_before)
 
-    # RMS difference between the two filtered signals
-    rms_diff = float(np.sqrt(np.mean((sp_filtered - oct_filtered) ** 2)))
+    # Signal differences (numerical variation & transient differences)
+    diff_signal = sp_filtered - oct_filtered
+    rms_diff = float(np.sqrt(np.mean(diff_signal ** 2)))
+    max_signal_diff = float(np.max(np.abs(diff_signal)))
+
+    # Difference waveform downsampled for plotting
+    t_diff, y_diff = dsp.waveform(diff_signal, fs)
 
     return {
         "max_response_diff_db": max_resp_diff_db,
         "snr_improvement_diff_db": snr_diff,
         "rms_signal_diff": rms_diff,
+        "max_signal_diff": max_signal_diff,
+        "scipy_elapsed_ms": sp_elapsed_ms,
+        "octave_elapsed_ms": oct_elapsed_ms,
+        "scipy_version": scipy.__version__,
+        "octave_version": octave_engine.version,
+        "octave_executable": octave_engine.executable,
+        "difference_waveform": {"t": t_diff, "y": y_diff},
         "scipy_response": {"f": sp_freqs, "db": sp_db},
         "octave_response": {"f": oct_freqs, "db": oct_db},
     }
