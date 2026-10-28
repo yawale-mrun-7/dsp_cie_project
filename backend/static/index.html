@@ -173,6 +173,99 @@
   .compare-nums .cn { text-align: center; }
   .compare-nums .cn .k { font-size: 12px; color: var(--muted); }
   .compare-nums .cn .v { font: 700 20px var(--display); }
+
+  /* Engine badge */
+  .engine-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 12px;
+    background: #e2e8f0;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.2s ease;
+  }
+  .engine-badge.running {
+    background: #fef3c7;
+    color: #92400e;
+    border: 1px solid #fde68a;
+    animation: pulse 1.2s infinite;
+  }
+  .engine-badge.octave {
+    background: #fff7ed;
+    color: var(--octave);
+    border: 1px solid #fed7aa;
+  }
+  .engine-badge.scipy {
+    background: #f5f3ff;
+    color: var(--resp);
+    border: 1px solid #ddd6fe;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+
+  /* Trace box */
+  .trace-box {
+    background: #ffffff;
+    color: var(--ink);
+    border-radius: 8px;
+    margin: 12px 0 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+  }
+  .trace-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    cursor: pointer;
+    background: #f0f4f8;
+    user-select: none;
+    transition: background 0.15s;
+  }
+  .trace-header:hover {
+    background: #e4ebf2;
+  }
+  .trace-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+  }
+  .trace-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #10b981;
+    display: inline-block;
+  }
+  .trace-dot.octave { background: var(--octave); }
+  .trace-dot.scipy { background: var(--resp); }
+  .trace-dot.running { background: #d97706; animation: pulse 0.8s infinite; }
+  .trace-toggle {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .trace-body {
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: #fafbfc;
+    border-top: 1px solid var(--line);
+    line-height: 1.6;
+  }
+  .trace-cmd { color: #0284c7; word-break: break-all; font-weight: 600; }
+  .trace-out { color: #059669; font-weight: 500; }
+  .trace-meta { color: var(--muted); font-size: 11px; }
 </style>
 </head>
 <body>
@@ -200,7 +293,15 @@
       <input type="range" id="noiseStart" min="1000" max="8000" step="100" value="3500">
 
       <button class="primary" id="gen">Generate noisy clip</button>
-      <label class="filebtn" for="file">Or upload a noisy WAV<input type="file" id="file" accept=".wav,audio/wav,audio/x-wav"></label>
+
+      <!-- Upload WAV file -->
+      <div style="margin-top:14px; border-top: 1px solid var(--line); padding-top:12px;">
+        <div class="rec-radios" id="uploadRadios">
+          <label><input type="radio" name="uploadMode" value="clean" checked> My uploaded file is clean: add hiss with sliders &amp; measure SNR</label>
+          <label><input type="radio" name="uploadMode" value="noisy"> My uploaded file is already noisy: filter it as-is</label>
+        </div>
+        <label class="filebtn" for="file" style="margin-top:6px;">Upload a WAV file<input type="file" id="file" accept=".wav,audio/wav,audio/x-wav"></label>
+      </div>
 
       <!-- Microphone recording -->
       <div style="margin-top:14px; border-top: 1px solid var(--line); padding-top:12px;">
@@ -231,20 +332,19 @@
           <option value="scipy">Python (SciPy)</option>
           <option value="octave" id="octaveOpt">Octave</option>
         </select>
+        <span id="engineBadge" class="engine-badge" hidden></span>
       </div>
       <p class="engine-note" id="engineNote"></p>
 
       <div class="presets" role="group" aria-label="Presets">
-        <button class="ghost" data-preset="good">Good setting</button>
-        <button class="ghost" data-preset="muffled">Too low</button>
-        <button class="ghost" data-preset="elliptic">Sharp elliptic</button>
+        <button class="ghost" data-preset="good">Optimal (3400 Hz)</button>
+        <button class="ghost" data-preset="aggressive">Aggressive (2500 Hz)</button>
+        <button class="ghost" data-preset="muffled">Muffled (1000 Hz)</button>
       </div>
 
       <label for="ftype">Filter type</label>
       <select id="ftype">
-        <option value="butterworth">Butterworth</option>
-        <option value="chebyshev">Chebyshev type I</option>
-        <option value="elliptic">Elliptic</option>
+        <option value="butterworth" selected>Butterworth (Maximally Flat)</option>
       </select>
 
       <div class="row"><label for="order">Order</label><output id="orderOut">6</output></div>
@@ -252,15 +352,6 @@
 
       <div class="row"><label for="cutoff">Cutoff frequency</label><output id="cutoffOut">3400 Hz</output></div>
       <input type="range" id="cutoff" min="200" max="7950" step="50" value="3400">
-
-      <div id="rippleWrap" hidden>
-        <div class="row"><label for="ripple">Passband ripple</label><output id="rippleOut">1.0 dB</output></div>
-        <input type="range" id="ripple" min="0.1" max="3" step="0.1" value="1">
-      </div>
-      <div id="stopWrap" hidden>
-        <div class="row"><label for="stop">Stopband attenuation</label><output id="stopOut">40 dB</output></div>
-        <input type="range" id="stop" min="20" max="100" step="5" value="40">
-      </div>
 
       <div class="check"><input type="checkbox" id="zp" checked><label for="zp" style="margin:0">Zero-phase (filter forward and back)</label></div>
       <p class="help">Off gives an ordinary real-time IIR, which delays and bends the waveform. Turn it off to hear and see the difference.</p>
@@ -290,9 +381,25 @@
       </div>
       <p id="hint" aria-live="polite"></p>
 
+      <!-- Execution Trace Box -->
+      <div class="trace-box" id="traceBox" hidden>
+        <div class="trace-header" id="traceHeader" onclick="toggleTrace()">
+          <div class="trace-title">
+            <span class="trace-dot" id="traceDot"></span>
+            <span id="traceSummary">Engine Execution Trace</span>
+          </div>
+          <span class="trace-toggle" id="traceToggle">▼ Show Details</span>
+        </div>
+        <div class="trace-body" id="traceBody" hidden>
+          <div class="trace-line" id="traceLineCmd"></div>
+          <div class="trace-line" id="traceLineOut"></div>
+          <div class="trace-line" id="traceLineMeta"></div>
+        </div>
+      </div>
+
       <div class="chart">
         <h3>Spectrum</h3>
-        <p>Where the energy sits across frequency. The dashed line is the cutoff.</p>
+        <p>Power across frequency. Speech energy concentrates below 3.5 kHz, while hiss appears as a flat high-frequency floor. The dashed vertical line marks your filter cutoff.</p>
         <div id="pSpec" style="height:340px"></div>
       </div>
 
@@ -317,9 +424,13 @@
 
       <!-- Compare card (hidden until compare is clicked) -->
       <div class="compare-card" id="compareCard" hidden>
-        <h3>Engine comparison</h3>
+        <h3>Engine comparison: SciPy vs GNU Octave</h3>
         <div class="compare-nums" id="compareNums"></div>
+        <h4 style="margin: 14px 0 6px; font-size: 14px; color: var(--muted);">1. Frequency Response Overlay</h4>
         <div id="pCompare" style="height:280px"></div>
+        <h4 style="margin: 18px 0 4px; font-size: 14px; color: var(--muted);">2. Numerical Difference Waveform (Δ = SciPy - Octave)</h4>
+        <p style="margin: 0 0 8px; font-size: 12px; color: var(--muted);">Sample-by-sample difference signal, showing transient handling differences at signal boundaries.</p>
+        <div id="pCompareDiff" style="height:220px"></div>
       </div>
     </div>
   </div>
@@ -459,15 +570,38 @@ async function generate() {
 
 async function upload(file) {
   showError("");
+  const mode = document.querySelector('input[name="uploadMode"]:checked')?.value || "clean";
   try {
     const fd = new FormData();
     fd.append("file", file);
+    fd.append("treat_as", mode);
+    fd.append("snr_db", $("snr").value);
+    fd.append("noise_start_hz", $("noiseStart").value);
+
     const p = await api("/upload", { method: "POST", body: fd });
-    applyNoisy(p, "uploaded");
+    state.noiseStart = +$("noiseStart").value;
+
+    if (p.sample_name) {
+      const cleanName = (file.name || p.sample_name).replace(/\.[^/.]+$/, "");
+      const opt = document.createElement("option");
+      opt.value = p.sample_name;
+      opt.textContent = "Uploaded: " + cleanName;
+      $("sample").appendChild(opt);
+      $("sample").value = p.sample_name;
+    }
+
+    applyNoisy(p, mode === "clean" ? "generated" : "uploaded");
   } catch (e) { showError(e.message); }
 }
 
 /* ---------- filtering ---------- */
+function toggleTrace() {
+  const b = $("traceBody");
+  const t = $("traceToggle");
+  b.hidden = !b.hidden;
+  t.textContent = b.hidden ? "▼ Show Details" : "▲ Hide Details";
+}
+
 function filterEndpoint() {
   return currentEngine() === "octave" ? "/octave-filter" : "/filter";
 }
@@ -475,13 +609,23 @@ function filterEndpoint() {
 async function runFilter() {
   if (!state.audioId) return;
   const mySeq = ++state.seq;
+  const isOct = currentEngine() === "octave";
+
+  // In-flight status feedback
+  $("engineBadge").textContent = isOct ? "⚙ Running GNU Octave (octave-cli)..." : "⚙ Filtering (SciPy)...";
+  $("engineBadge").className = "engine-badge running";
+  $("engineBadge").hidden = false;
+  $("traceBox").hidden = false;
+  $("traceDot").className = "trace-dot running";
+  $("traceSummary").textContent = isOct ? "Invoking GNU Octave subprocess..." : "Invoking SciPy in-process...";
+
   const req = {
     audio_id: state.audioId,
-    filter_type: $("ftype").value,
+    filter_type: "butterworth",
     order: +$("order").value,
     cutoff_hz: +$("cutoff").value,
-    ripple_db: +$("ripple").value,
-    stopband_db: +$("stop").value,
+    ripple_db: 1.0,
+    stopband_db: 40.0,
     zero_phase: $("zp").checked,
   };
   try {
@@ -498,18 +642,59 @@ async function runFilter() {
     $("mBefore").textContent = fmtDb(m.snr_before_db);
     $("mAfter").textContent = fmtDb(m.snr_after_db);
     $("mGain").textContent = m.snr_improvement_db == null ? "n/a" : (m.snr_improvement_db >= 0 ? "+" : "") + m.snr_improvement_db.toFixed(1) + " dB";
-    $("mFilter").textContent = cap(m.filter_type) + ", order " + m.order;
-    $("mEngine").textContent = r.engine === "octave" ? "Octave" : "SciPy";
+    $("mFilter").textContent = "Butterworth, order " + m.order;
+
+    const info = r.engine_info || {};
+    const msStr = info.elapsed_ms != null ? info.elapsed_ms.toFixed(1) + " ms" : "";
+
+    if (r.engine === "octave") {
+      $("mEngine").innerHTML = 'GNU Octave <span style="font-size:12px; font-weight:normal; color:var(--octave)">(' + msStr + ')</span>';
+      $("engineBadge").textContent = "✓ GNU Octave " + (info.version || "") + " • " + msStr;
+      $("engineBadge").className = "engine-badge octave";
+      $("traceDot").className = "trace-dot octave";
+      $("traceSummary").textContent = "✓ Executed in GNU Octave " + (info.version || "") + " (" + msStr + ") via octave/iir_lowpass.m";
+      $("traceLineCmd").innerHTML = '<span class="trace-cmd">&gt;&gt; ' + (info.command || "iir_lowpass(...)") + '</span>';
+      $("traceLineOut").innerHTML = '<span class="trace-out">&lt;&lt; Process: ' + (info.executable || "octave-cli.exe") + ' | Status: 200 OK | Latency: ' + msStr + '</span>';
+      $("traceLineMeta").innerHTML = '<span class="trace-meta">Script: ' + (info.script || "octave/iir_lowpass.m") + ' | Package: signal | Order: ' + m.order + ' | Zero-phase: ' + req.zero_phase + '</span>';
+    } else {
+      $("mEngine").innerHTML = 'SciPy <span style="font-size:12px; font-weight:normal; color:var(--resp)">(' + msStr + ')</span>';
+      $("engineBadge").textContent = "✓ SciPy " + (info.version || "") + " • " + msStr;
+      $("engineBadge").className = "engine-badge scipy";
+      $("traceDot").className = "trace-dot scipy";
+      $("traceSummary").textContent = "✓ Executed in SciPy " + (info.version || "") + " (" + msStr + ") in-process";
+      $("traceLineCmd").innerHTML = '<span class="trace-cmd">&gt;&gt; ' + (info.method || "scipy.signal.sosfilt") + '(sos, x)</span>';
+      $("traceLineOut").innerHTML = '<span class="trace-out">&lt;&lt; In-process C/NumPy execution | Latency: ' + msStr + '</span>';
+      $("traceLineMeta").innerHTML = '<span class="trace-meta">Library: SciPy ' + (info.version || "") + ' | Order: ' + m.order + ' | Zero-phase: ' + req.zero_phase + '</span>';
+    }
+
     updateHint();
-  } catch (e) { if (mySeq === state.seq) showError(e.message); }
+  } catch (e) {
+    if (mySeq === state.seq) {
+      showError(e.message);
+      $("engineBadge").hidden = true;
+    }
+  }
 }
 const scheduleFilter = debounce(runFilter, 150);
 
 function updateHint() {
   const c = +$("cutoff").value;
   let msg = "";
-  if (c < 2000) msg = "This cutoff is inside the voice band, so the speech will start to sound muffled.";
-  else if (state.source === "generated" && c > state.noiseStart + 500) msg = "This cutoff is above where the hiss starts, so some hiss will pass through.";
+  if (c < 2000) {
+    msg = "Cutoff is below 2000 Hz (inside core voice frequencies), which will muffle speech vowels and consonants.";
+  } else if (state.source === "generated") {
+    if (c > state.noiseStart + 300) {
+      msg = `Cutoff (${c} Hz) is above where the added hiss starts (${state.noiseStart} Hz), allowing hiss to pass through.`;
+    } else {
+      msg = `Cutoff (${c} Hz) is set below the hiss onset (${state.noiseStart} Hz), effectively attenuating high-frequency noise.`;
+    }
+  } else {
+    if (c > 4500) {
+      msg = "For uploaded audio: hiss and high-frequency noise typically sit above 3500–4000 Hz. Check the spectrum graph above to locate the noise floor.";
+    } else {
+      msg = "Optimal voice band: preserving speech frequencies up to " + c + " Hz while filtering out high-frequency noise.";
+    }
+  }
   $("hint").textContent = msg;
 }
 
@@ -519,15 +704,10 @@ function syncOutputs() {
   $("noiseStartOut").textContent = $("noiseStart").value + " Hz";
   $("orderOut").textContent = $("order").value;
   $("cutoffOut").textContent = $("cutoff").value + " Hz";
-  $("rippleOut").textContent = (+$("ripple").value).toFixed(1) + " dB";
-  $("stopOut").textContent = $("stop").value + " dB";
-  const t = $("ftype").value;
-  $("rippleWrap").hidden = t === "butterworth";
-  $("stopWrap").hidden = t !== "elliptic";
 }
 
 ["snr", "noiseStart"].forEach((id) => $(id).addEventListener("input", syncOutputs));
-["ftype", "order", "cutoff", "ripple", "stop", "zp"].forEach((id) => {
+["order", "cutoff", "zp"].forEach((id) => {
   $(id).addEventListener("input", () => { syncOutputs(); scheduleFilter(); });
 });
 $("gen").addEventListener("click", generate);
@@ -541,12 +721,11 @@ $("engineSel").addEventListener("change", () => {
 
 const PRESETS = {
   good: { ftype: "butterworth", order: 6, cutoff: 3400 },
-  muffled: { ftype: "butterworth", order: 6, cutoff: 800 },
-  elliptic: { ftype: "elliptic", order: 6, cutoff: 3400 },
+  aggressive: { ftype: "butterworth", order: 8, cutoff: 2500 },
+  muffled: { ftype: "butterworth", order: 6, cutoff: 1000 },
 };
 document.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => {
   const p = PRESETS[b.dataset.preset];
-  $("ftype").value = p.ftype;
   $("order").value = p.order;
   $("cutoff").value = Math.min(p.cutoff, +$("cutoff").max);
   syncOutputs();
@@ -818,6 +997,15 @@ $("recUse").addEventListener("click", async () => {
   try {
     const p = await api("/record", { method: "POST", body: fd });
     state.noiseStart = +$("noiseStart").value;
+
+    if (p.sample_name) {
+      const opt = document.createElement("option");
+      opt.value = p.sample_name;
+      opt.textContent = "Mic Recording: " + p.sample_name;
+      $("sample").appendChild(opt);
+      $("sample").value = p.sample_name;
+    }
+
     applyNoisy(p, mode === "clean" ? "generated" : "uploaded");
   } catch (e) {
     showError(e.message);
@@ -839,11 +1027,11 @@ $("compareBtn").addEventListener("click", async () => {
 
   const req = {
     audio_id: state.audioId,
-    filter_type: $("ftype").value,
+    filter_type: "butterworth",
     order: +$("order").value,
     cutoff_hz: +$("cutoff").value,
-    ripple_db: +$("ripple").value,
-    stopband_db: +$("stop").value,
+    ripple_db: 1.0,
+    stopband_db: 40.0,
     zero_phase: $("zp").checked,
   };
 
@@ -854,9 +1042,12 @@ $("compareBtn").addEventListener("click", async () => {
     const nums = $("compareNums");
     nums.innerHTML = "";
     const items = [
-      { k: "Max response diff", v: r.max_response_diff_db != null ? r.max_response_diff_db.toFixed(3) + " dB" : "n/a" },
-      { k: "SNR improvement diff", v: r.snr_improvement_diff_db != null ? r.snr_improvement_diff_db.toFixed(3) + " dB" : "n/a" },
-      { k: "RMS signal diff", v: r.rms_signal_diff != null ? r.rms_signal_diff.toExponential(2) : "n/a" },
+      { k: "SciPy Latency", v: r.scipy_elapsed_ms != null ? r.scipy_elapsed_ms.toFixed(1) + " ms" : "n/a" },
+      { k: "Octave Latency", v: r.octave_elapsed_ms != null ? r.octave_elapsed_ms.toFixed(1) + " ms" : "n/a" },
+      { k: "RMS Signal Diff", v: r.rms_signal_diff != null ? r.rms_signal_diff.toExponential(2) : "n/a" },
+      { k: "Peak Signal Diff", v: r.max_signal_diff != null ? r.max_signal_diff.toFixed(4) : "n/a" },
+      { k: "Max Response Diff", v: r.max_response_diff_db != null ? r.max_response_diff_db.toFixed(3) + " dB" : "n/a" },
+      { k: "SNR Imprv. Diff", v: r.snr_improvement_diff_db != null ? r.snr_improvement_diff_db.toFixed(3) + " dB" : "n/a" },
     ];
     for (const it of items) {
       const d = document.createElement("div"); d.className = "cn";
@@ -872,6 +1063,20 @@ $("compareBtn").addEventListener("click", async () => {
       { x: r.scipy_response.f, y: r.scipy_response.db, name: "Python (SciPy)", mode: "lines", line: { color: C.resp, width: 2 } },
       { x: r.octave_response.f, y: r.octave_response.db, name: "Octave", mode: "lines", line: { color: C.octave, width: 2, dash: "dash" } },
     ], lay, cfg);
+
+    // Draw numerical difference waveform
+    if (r.difference_waveform && r.difference_waveform.t) {
+      const layDiff = baseLayout("Time (s)", "Δ Amplitude (SciPy - Octave)");
+      Plotly.react("pCompareDiff", [
+        {
+          x: r.difference_waveform.t,
+          y: r.difference_waveform.y,
+          name: "Δ Signal",
+          mode: "lines",
+          line: { color: "#e11d48", width: 1.5 }
+        }
+      ], layDiff, cfg);
+    }
 
     $("compareCard").hidden = false;
   } catch (e) { showError(e.message); }
