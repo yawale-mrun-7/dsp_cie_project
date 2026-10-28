@@ -40,14 +40,24 @@ class OctaveEngine:
 
     # ---------------------------------------------------------------- startup
     def _try_init(self):
+        # Auto-detect GNU Octave on Windows if OCTAVE_EXECUTABLE is not explicitly set
+        exe = os.environ.get("OCTAVE_EXECUTABLE", "")
+        if not exe and os.name == "nt":
+            import glob
+            found = glob.glob(r"C:\Program Files\GNU Octave\*\mingw64\bin\octave-cli.exe")
+            if not found:
+                found = glob.glob(r"C:\Octave\*\mingw64\bin\octave-cli.exe")
+            if found:
+                exe = found[0]
+                os.environ["OCTAVE_EXECUTABLE"] = exe
+
         try:
-            import oct2py  # noqa: F401 -- imported for version check first
+            import oct2py  # noqa: F401
         except ImportError:
             self.reason = "oct2py is not installed (pip install oct2py)."
             log.warning("Octave engine: %s", self.reason)
             return
 
-        exe = os.environ.get("OCTAVE_EXECUTABLE", "")
         kwargs = {}
         if exe:
             kwargs["executable"] = exe

@@ -19,6 +19,7 @@
     --clean: #0e8a84;
     --resp: #4a3fb0;
     --danger: #a8321f;
+    --octave: #d96e0b;
     --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
     --body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
   }
@@ -101,7 +102,7 @@
   button.ghost:hover, .filebtn:hover { border-color: var(--ink); }
   .filebtn { display: block; text-align: center; margin-top: 10px; font-weight: 500; }
   .filebtn input { display: none; }
-  button:disabled { opacity: .55; cursor: wait; }
+  button:disabled { opacity: .55; cursor: default; }
   :focus-visible { outline: 3px solid var(--resp); outline-offset: 2px; }
   .presets { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 6px; }
   .presets button { padding: 6px 10px; font-weight: 500; }
@@ -144,6 +145,34 @@
   .chart p { margin: 0 0 4px 4px; color: var(--muted); font-size: 13px; }
   .two { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; }
   @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
+
+  /* Microphone recording */
+  .rec-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+  #recBtn.recording { background: var(--danger); color: #fff; border-color: var(--danger); }
+  #recTimer { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; min-width: 3em; }
+  .level-bar { width: 80px; height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+  .level-bar-fill { height: 100%; width: 0%; background: var(--clean); border-radius: 4px; transition: width 80ms; }
+  .rec-preview { margin-top: 10px; padding: 10px 12px; background: #f0f4f7; border: 1px solid var(--line); border-radius: 8px; }
+  .rec-preview audio { width: 100%; margin: 6px 0; }
+  .rec-radios label { display: flex; align-items: flex-start; gap: 6px; font-weight: 400; font-size: 13px; margin: 4px 0; cursor: pointer; }
+  .rec-radios input[type=radio] { margin-top: 3px; accent-color: var(--ink); }
+
+  /* Engine selector */
+  .engine-row { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; }
+  .engine-row label { margin: 0; }
+  .engine-row select { width: auto; min-width: 140px; }
+  .engine-note { color: var(--muted); font-size: 12px; margin: 0 0 2px; }
+
+  /* Compare card */
+  .compare-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 16px;
+  }
+  .compare-card h3 { margin: 0 0 10px; font: 600 16px var(--display); }
+  .compare-nums { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 12px; }
+  .compare-nums .cn { text-align: center; }
+  .compare-nums .cn .k { font-size: 12px; color: var(--muted); }
+  .compare-nums .cn .v { font: 700 20px var(--display); }
 </style>
 </head>
 <body>
@@ -172,10 +201,38 @@
 
       <button class="primary" id="gen">Generate noisy clip</button>
       <label class="filebtn" for="file">Or upload a noisy WAV<input type="file" id="file" accept=".wav,audio/wav,audio/x-wav"></label>
+
+      <!-- Microphone recording -->
+      <div style="margin-top:14px; border-top: 1px solid var(--line); padding-top:12px;">
+        <div class="rec-radios" id="recRadios">
+          <label><input type="radio" name="recMode" value="clean" checked> My recording is clean: add hiss at the noise level set above</label>
+          <label><input type="radio" name="recMode" value="noisy"> My recording already has noise: filter it as-is</label>
+        </div>
+        <div class="rec-row">
+          <button class="ghost" id="recBtn">Record from microphone</button>
+          <span id="recTimer"></span>
+          <div class="level-bar" id="levelBar" hidden><div class="level-bar-fill" id="levelFill"></div></div>
+        </div>
+        <p class="help">For a good test, record 5 to 10 seconds of a sentence with s and sh sounds, in a quiet room.</p>
+        <div class="rec-preview" id="recPreview" hidden>
+          <strong style="font-size:14px;">Preview your recording</strong>
+          <audio id="recAudio" controls></audio>
+          <button class="primary" id="recUse" style="margin-top:8px;">Use this recording</button>
+        </div>
+      </div>
     </section>
 
     <section>
       <h2><span class="step">2</span>Filter</h2>
+
+      <div class="engine-row">
+        <label for="engineSel">Engine</label>
+        <select id="engineSel">
+          <option value="scipy">Python (SciPy)</option>
+          <option value="octave" id="octaveOpt">Octave</option>
+        </select>
+      </div>
+      <p class="engine-note" id="engineNote"></p>
 
       <div class="presets" role="group" aria-label="Presets">
         <button class="ghost" data-preset="good">Good setting</button>
@@ -207,6 +264,8 @@
 
       <div class="check"><input type="checkbox" id="zp" checked><label for="zp" style="margin:0">Zero-phase (filter forward and back)</label></div>
       <p class="help">Off gives an ordinary real-time IIR, which delays and bends the waveform. Turn it off to hear and see the difference.</p>
+
+      <button class="ghost" id="compareBtn" style="width:100%; margin-top:14px;" disabled>Compare engines</button>
     </section>
   </aside>
 
@@ -227,6 +286,7 @@
         <div class="metric"><div class="k">SNR after</div><div class="v" id="mAfter">n/a</div></div>
         <div class="metric big"><div class="k">Improvement</div><div class="v" id="mGain">n/a</div></div>
         <div class="metric"><div class="k">Filter</div><div class="v" id="mFilter" style="font-size:18px">n/a</div></div>
+        <div class="metric"><div class="k">Engine</div><div class="v" id="mEngine" style="font-size:18px">SciPy</div></div>
       </div>
       <p id="hint" aria-live="polite"></p>
 
@@ -254,16 +314,25 @@
         <p>Amplitude over time, noisy against filtered.</p>
         <div id="pWave" style="height:240px"></div>
       </div>
+
+      <!-- Compare card (hidden until compare is clicked) -->
+      <div class="compare-card" id="compareCard" hidden>
+        <h3>Engine comparison</h3>
+        <div class="compare-nums" id="compareNums"></div>
+        <div id="pCompare" style="height:280px"></div>
+      </div>
     </div>
   </div>
 </main>
 
 <script>
 const API = "http://127.0.0.1:8000";
-const C = { noisy: "#d9822b", clean: "#0e8a84", resp: "#4a3fb0", ink: "#16232e", grid: "#dbe2e8" };
+const C = { noisy: "#d9822b", clean: "#0e8a84", resp: "#4a3fb0", ink: "#16232e", grid: "#dbe2e8", octave: "#d96e0b" };
 const $ = (id) => document.getElementById(id);
 
 const state = { audioId: null, fs: null, source: null, noiseStart: 3500, noisySpec: null, noisyWave: null, seq: 0, urls: {} };
+let octaveAvailable = false;
+let octaveReason = "";
 
 /* ---------- helpers ---------- */
 function showError(msg) { const a = $("alert"); a.textContent = msg; a.hidden = !msg; }
@@ -298,6 +367,8 @@ function setAudio(el, key, b64) {
 
 const fmtDb = (v) => (v == null ? "n/a" : v.toFixed(1) + " dB");
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+function currentEngine() { return $("engineSel").value; }
 
 /* ---------- plots ---------- */
 const baseLayout = (xTitle, yTitle) => ({
@@ -369,6 +440,7 @@ function applyNoisy(p, source) {
   setAudio($("aNoisy"), "noisy", p.noisy_audio);
   $("empty").hidden = true;
   $("results").hidden = false;
+  $("compareCard").hidden = true;
   runFilter();
 }
 
@@ -396,6 +468,10 @@ async function upload(file) {
 }
 
 /* ---------- filtering ---------- */
+function filterEndpoint() {
+  return currentEngine() === "octave" ? "/octave-filter" : "/filter";
+}
+
 async function runFilter() {
   if (!state.audioId) return;
   const mySeq = ++state.seq;
@@ -409,7 +485,7 @@ async function runFilter() {
     zero_phase: $("zp").checked,
   };
   try {
-    const r = await api("/filter", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) });
+    const r = await api(filterEndpoint(), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) });
     if (mySeq !== state.seq) return; // a newer request is already in flight
     showError("");
     setAudio($("aClean"), "clean", r.filtered_audio);
@@ -423,6 +499,7 @@ async function runFilter() {
     $("mAfter").textContent = fmtDb(m.snr_after_db);
     $("mGain").textContent = m.snr_improvement_db == null ? "n/a" : (m.snr_improvement_db >= 0 ? "+" : "") + m.snr_improvement_db.toFixed(1) + " dB";
     $("mFilter").textContent = cap(m.filter_type) + ", order " + m.order;
+    $("mEngine").textContent = r.engine === "octave" ? "Octave" : "SciPy";
     updateHint();
   } catch (e) { if (mySeq === state.seq) showError(e.message); }
 }
@@ -456,6 +533,12 @@ function syncOutputs() {
 $("gen").addEventListener("click", generate);
 $("file").addEventListener("change", (e) => { if (e.target.files[0]) upload(e.target.files[0]); e.target.value = ""; });
 
+// Engine selector
+$("engineSel").addEventListener("change", () => {
+  $("compareCard").hidden = true;
+  scheduleFilter();
+});
+
 const PRESETS = {
   good: { ftype: "butterworth", order: 6, cutoff: 3400 },
   muffled: { ftype: "butterworth", order: 6, cutoff: 800 },
@@ -470,9 +553,358 @@ document.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("cl
   scheduleFilter();
 }));
 
+/* ========== MICROPHONE RECORDING ========== */
+let mediaStream = null;
+let audioCtx = null;
+let recState = "idle"; // idle | recording | processing
+let recChunks = [];
+let recStartTime = 0;
+let recTimerInterval = null;
+let recAnalyser = null;
+let recWorkletNode = null;
+let recScriptNode = null;
+const MAX_REC_SEC = 15;
+const MIN_REC_SEC = 1;
+
+$("recBtn").addEventListener("click", async () => {
+  if (recState === "idle") {
+    await startRecording();
+  } else if (recState === "recording") {
+    stopRecording();
+  }
+});
+
+async function startRecording() {
+  showError("");
+  $("recPreview").hidden = true;
+  recChunks = [];
+
+  // Check for secure context (microphone requires HTTPS or 127.0.0.1)
+  if (!window.isSecureContext) {
+    showError("Recording needs the page to be opened at http://127.0.0.1:8000 (not by double-clicking the HTML file), because browsers only allow microphone access on secure origins, and 127.0.0.1 counts as one.");
+    return;
+  }
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showError("This browser does not support microphone recording.");
+    return;
+  }
+
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      }
+    });
+  } catch (err) {
+    if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+      showError("Microphone permission was denied. Please allow microphone access and try again.");
+    } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+      showError("No microphone was found. Please connect a microphone and try again.");
+    } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+      showError("The microphone is in use by another application. Please close it and try again.");
+    } else {
+      showError("Could not access the microphone: " + err.message);
+    }
+    return;
+  }
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const source = audioCtx.createMediaStreamSource(mediaStream);
+
+  // Analyser for the level meter
+  recAnalyser = audioCtx.createAnalyser();
+  recAnalyser.fftSize = 256;
+  source.connect(recAnalyser);
+
+  // Try AudioWorklet, fall back to ScriptProcessorNode
+  let workletReady = false;
+  if (audioCtx.audioWorklet) {
+    try {
+      const workletCode = `
+        class RecProcessor extends AudioWorkletProcessor {
+          process(inputs) {
+            const ch = inputs[0] && inputs[0][0];
+            if (ch) this.port.postMessage(Array.from(ch));
+            return true;
+          }
+        }
+        registerProcessor("rec-processor", RecProcessor);
+      `;
+      const blob = new Blob([workletCode], { type: "application/javascript" });
+      const url = URL.createObjectURL(blob);
+      await audioCtx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      recWorkletNode = new AudioWorkletNode(audioCtx, "rec-processor");
+      recWorkletNode.port.onmessage = (e) => { recChunks.push(new Float32Array(e.data)); };
+      source.connect(recWorkletNode);
+      recWorkletNode.connect(audioCtx.destination); // needed to keep the graph alive
+      workletReady = true;
+    } catch (_) { /* fall through to ScriptProcessor */ }
+  }
+
+  if (!workletReady) {
+    // ScriptProcessorNode fallback
+    recScriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+    recScriptNode.onaudioprocess = (e) => {
+      const data = e.inputBuffer.getChannelData(0);
+      recChunks.push(new Float32Array(data));
+    };
+    source.connect(recScriptNode);
+    recScriptNode.connect(audioCtx.destination);
+  }
+
+  recState = "recording";
+  recStartTime = Date.now();
+  $("recBtn").textContent = "Stop";
+  $("recBtn").classList.add("recording");
+  $("levelBar").hidden = false;
+  updateRecTimer();
+  recTimerInterval = setInterval(() => {
+    updateRecTimer();
+    updateLevelMeter();
+    // Auto-stop at MAX_REC_SEC
+    const elapsed = (Date.now() - recStartTime) / 1000;
+    if (elapsed >= MAX_REC_SEC) stopRecording();
+  }, 100);
+}
+
+function updateRecTimer() {
+  const sec = Math.floor((Date.now() - recStartTime) / 1000);
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  $("recTimer").textContent = m + ":" + String(s).padStart(2, "0");
+}
+
+function updateLevelMeter() {
+  if (!recAnalyser) return;
+  const buf = new Float32Array(recAnalyser.fftSize);
+  recAnalyser.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+  const rms = Math.sqrt(sum / buf.length);
+  // Map RMS to 0-100% (0.0 to 0.3 is typical speech range)
+  const pct = Math.min(100, (rms / 0.15) * 100);
+  $("levelFill").style.width = pct + "%";
+}
+
+function stopRecording() {
+  clearInterval(recTimerInterval);
+
+  // Check minimum duration
+  const elapsed = (Date.now() - recStartTime) / 1000;
+  if (elapsed < MIN_REC_SEC) {
+    showError("Recording is too short (minimum 1 second). Please try again.");
+    cleanupRecording();
+    resetRecUI();
+    return;
+  }
+
+  recState = "processing";
+  $("recBtn").textContent = "Processing...";
+  $("recBtn").disabled = true;
+
+  // Stop the media stream tracks
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => t.stop());
+    mediaStream = null;
+  }
+
+  // Build the WAV from collected chunks
+  const sampleRate = audioCtx ? audioCtx.sampleRate : 44100;
+  const allSamples = flattenChunks(recChunks);
+  const wavBlob = encodeWAV(allSamples, sampleRate);
+
+  cleanupRecording();
+
+  // Show preview
+  const previewUrl = URL.createObjectURL(wavBlob);
+  $("recAudio").src = previewUrl;
+  $("recPreview").hidden = false;
+
+  // Store the blob for later upload
+  $("recUse")._wavBlob = wavBlob;
+
+  resetRecUI();
+}
+
+function cleanupRecording() {
+  if (recWorkletNode) { try { recWorkletNode.disconnect(); } catch (_) {} recWorkletNode = null; }
+  if (recScriptNode) { try { recScriptNode.disconnect(); } catch (_) {} recScriptNode = null; }
+  if (audioCtx) { try { audioCtx.close(); } catch (_) {} audioCtx = null; }
+  recAnalyser = null;
+}
+
+function resetRecUI() {
+  recState = "idle";
+  $("recBtn").textContent = "Record from microphone";
+  $("recBtn").classList.remove("recording");
+  $("recBtn").disabled = false;
+  $("recTimer").textContent = "";
+  $("levelBar").hidden = true;
+  $("levelFill").style.width = "0%";
+}
+
+function flattenChunks(chunks) {
+  let len = 0;
+  for (const c of chunks) len += c.length;
+  const result = new Float32Array(len);
+  let off = 0;
+  for (const c of chunks) { result.set(c, off); off += c.length; }
+  return result;
+}
+
+// Encode Float32 samples as 16-bit PCM WAV
+function encodeWAV(samples, sampleRate) {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  // RIFF header
+  writeStr(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(view, 8, "WAVE");
+  // fmt sub-chunk
+  writeStr(view, 12, "fmt ");
+  view.setUint32(16, 16, true);            // sub-chunk size
+  view.setUint16(20, 1, true);             // PCM format
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  // data sub-chunk
+  writeStr(view, 36, "data");
+  view.setUint32(40, dataSize, true);
+
+  // Convert float samples to 16-bit PCM
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    let s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+function writeStr(view, offset, str) {
+  for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+}
+
+// "Use this recording" button
+$("recUse").addEventListener("click", async () => {
+  const wavBlob = $("recUse")._wavBlob;
+  if (!wavBlob) return;
+  showError("");
+  $("recUse").disabled = true;
+  $("recUse").textContent = "Uploading...";
+
+  const mode = document.querySelector('input[name="recMode"]:checked').value;
+  const fd = new FormData();
+  fd.append("file", wavBlob, "recording.wav");
+  fd.append("treat_as", mode);
+  fd.append("snr_db", $("snr").value);
+  fd.append("noise_start_hz", $("noiseStart").value);
+
+  try {
+    const p = await api("/record", { method: "POST", body: fd });
+    state.noiseStart = +$("noiseStart").value;
+    applyNoisy(p, mode === "clean" ? "generated" : "uploaded");
+  } catch (e) {
+    showError(e.message);
+  }
+
+  $("recUse").disabled = false;
+  $("recUse").textContent = "Use this recording";
+});
+
+
+/* ========== COMPARE ENGINES ========== */
+$("compareBtn").addEventListener("click", async () => {
+  if (!state.audioId) return;
+  if (!octaveAvailable) { showError("Octave is not available: " + octaveReason); return; }
+
+  $("compareBtn").disabled = true;
+  $("compareBtn").textContent = "Comparing...";
+  showError("");
+
+  const req = {
+    audio_id: state.audioId,
+    filter_type: $("ftype").value,
+    order: +$("order").value,
+    cutoff_hz: +$("cutoff").value,
+    ripple_db: +$("ripple").value,
+    stopband_db: +$("stop").value,
+    zero_phase: $("zp").checked,
+  };
+
+  try {
+    const r = await api("/compare", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) });
+
+    // Show numbers
+    const nums = $("compareNums");
+    nums.innerHTML = "";
+    const items = [
+      { k: "Max response diff", v: r.max_response_diff_db != null ? r.max_response_diff_db.toFixed(3) + " dB" : "n/a" },
+      { k: "SNR improvement diff", v: r.snr_improvement_diff_db != null ? r.snr_improvement_diff_db.toFixed(3) + " dB" : "n/a" },
+      { k: "RMS signal diff", v: r.rms_signal_diff != null ? r.rms_signal_diff.toExponential(2) : "n/a" },
+    ];
+    for (const it of items) {
+      const d = document.createElement("div"); d.className = "cn";
+      d.innerHTML = '<div class="k">' + it.k + '</div><div class="v">' + it.v + '</div>';
+      nums.appendChild(d);
+    }
+
+    // Draw overlaid frequency response
+    const lay = baseLayout("Frequency (Hz)", "Gain (dB)");
+    lay.yaxis.range = [-100, 5];
+    lay.shapes = [cutLine(req.cutoff_hz)];
+    Plotly.react("pCompare", [
+      { x: r.scipy_response.f, y: r.scipy_response.db, name: "Python (SciPy)", mode: "lines", line: { color: C.resp, width: 2 } },
+      { x: r.octave_response.f, y: r.octave_response.db, name: "Octave", mode: "lines", line: { color: C.octave, width: 2, dash: "dash" } },
+    ], lay, cfg);
+
+    $("compareCard").hidden = false;
+  } catch (e) { showError(e.message); }
+
+  $("compareBtn").disabled = false;
+  $("compareBtn").textContent = "Compare engines";
+});
+
+
 /* ---------- start ---------- */
 (async function init() {
   syncOutputs();
+
+  // Check Octave status
+  try {
+    const oct = await api("/octave-status");
+    octaveAvailable = oct.available;
+    octaveReason = oct.reason || "";
+    if (!oct.available) {
+      $("octaveOpt").disabled = true;
+      $("engineNote").textContent = "Octave unavailable: " + octaveReason;
+    } else {
+      $("engineNote").textContent = "Octave " + (oct.version || "") + " ready.";
+      $("compareBtn").disabled = false;
+    }
+  } catch (_) {
+    $("octaveOpt").disabled = true;
+    $("engineNote").textContent = "Could not check Octave status.";
+  }
+
+  // Update compare button state based on octave availability and clip loading
+  if (!octaveAvailable) $("compareBtn").disabled = true;
+
   try {
     const { samples } = await api("/samples");
     if (!samples.length) { showError("No WAV files found in backend/samples. Add a clean voice recording there and reload this page."); return; }
